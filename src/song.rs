@@ -1,33 +1,21 @@
-use crate::formats::modfile;
-use std::{fs, fmt};
+use thiserror::Error;
 
-#[derive(Debug)]
+use crate::{bytereader::{ByteReader, Encoding}, formats::modfile};
+use std::{ffi::OsStr, fs, path::Path};
+
+#[derive(Debug, Error)]
 pub enum SongError {
-  IoError(String),
-  ReadError(String),
-
+    #[error("IO Error: {0}")]
+    Io(String),
+    #[error("Read Error: {0}")]
+    Read(String),
 }
 
-impl fmt::Display for SongError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SongError::IoError(msg) => write!(f, "IO Error: {}", msg),
-            SongError::ReadError(msg) => write!(f, "Read Error: {}", msg),
-        }
+impl From<SongError> for String {
+    fn from(value: SongError) -> Self {
+        format!("{value}")
     }
 }
-
-impl SongError {
-    pub fn read<S: Into<String>>(msg: S) -> Self {
-        Self::ReadError(msg.into())
-    }
-
-    pub fn io<S: Into<String>>(msg: S) -> Self {
-        Self::IoError(msg.into())
-    }
-}
-
-impl std::error::Error for SongError {}
 
 #[allow(dead_code)]
 pub struct Song {
@@ -53,16 +41,29 @@ pub struct Sample {
     pub repeat_length: i32,
 }
 
-pub fn new<'a>(path: &'a str) -> Result<Song, SongError> {
-    println!("{}", path);
-    
-    // TODO: Handle multiple formats
-    if path.split(".").last().unwrap_or("") != "mod" {
-      return Err(SongError::io("Unrecognized format"));
+impl Song {
+    pub fn new(path: &Path) -> Result<Song, SongError> {
+        dbg!(path);
+
+        // TODO: Handle multiple formats
+        if path.extension() != Some(OsStr::new("mod")) {
+            return Err(SongError::Io("Unrecognized format".into()));
+        }
+
+        let data = fs::read(path).map_err(|_| SongError::Io("Unrecognized format".into()))?;
+
+        Song::new_from_bytes(data)
     }
 
-    let data = fs::read(path)
-        .map_err(|_| SongError::io("Unrecognized format"))?;
-
-    modfile::parse(data)
+    pub fn new_from_bytes(data: Vec<u8>) -> Result<Song, SongError> {
+      let mut reader = ByteReader::new(&data, Encoding::BigEndian);
+    
+      let title = reader.read_str(20)?;
+    
+      let _sample1 = modfile::read_sample(&mut reader)?;
+    
+      dbg!(&title);
+    
+      todo!();
+    }
 }

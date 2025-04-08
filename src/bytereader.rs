@@ -7,11 +7,29 @@ pub enum Encoding {
     BigEndian,
 }
 
+// look at `byteorder`, `bytes` crates for code that provides similar existing implementations
+
 #[derive(Debug)]
 pub struct ByteReader<'a> {
     data: &'a [u8],
     offset: usize,
     encoding: Encoding,
+}
+
+trait ToArray {
+    type Item;
+
+    fn to_array<const N: usize>(self) -> [Self::Item; N];
+}
+
+impl ToArray for &[u8] {
+    type Item = u8;
+
+    /// Creates an array of the first N elements of the slice, automatically inferring
+    /// the size from context
+    fn to_array<const N: usize>(self) -> [Self::Item; N] {
+        self[0..N].try_into().unwrap()
+    }
 }
 
 #[allow(dead_code)]
@@ -26,7 +44,7 @@ impl<'a> ByteReader<'a> {
 
     pub fn read_bytes(&mut self, count: usize) -> Result<&'a [u8], SongError> {
         if self.offset + count > self.data.len() {
-            return Err(SongError::read(format!(
+            return Err(SongError::Read(format!(
                 "Not enough data to read {} bytes at offset {}",
                 count, self.offset
             )));
@@ -39,18 +57,18 @@ impl<'a> ByteReader<'a> {
     }
 
     pub fn read_str(&mut self, length: usize) -> Result<String, SongError> {
-        if self.offset + length > self.data.len() {
-            return Err(SongError::read(format!(
+        let bytes = self.read_bytes(length).map_err(|_| {
+            SongError::Read(format!(
                 "Not enough data to read string of length {} at offset {}",
                 length, self.offset
-            )));
-        }
+            ))
+        })?;
 
-        let result = std::str::from_utf8(&self.data[self.offset..self.offset + length])
-            .map_err(|e| SongError::read(format!("UTF-8 error: {}", e)))?;
+        let string = std::str::from_utf8(bytes)
+            .map_err(|e| SongError::Read(format!("UTF-8 error: {}", e)))?
+            .to_string();
 
-        self.offset += length;
-        Ok(result.to_string())
+        Ok(string)
     }
 
     pub fn read_u8(&mut self) -> Result<u8, SongError> {
@@ -65,12 +83,8 @@ impl<'a> ByteReader<'a> {
         let bytes = self.read_bytes(2)?;
 
         match self.encoding {
-            Encoding::BigEndian => Ok(u16::from_be_bytes(
-                [bytes[0], bytes[1]]
-            )),
-            Encoding::LittleEndian => Ok(u16::from_le_bytes(
-                [bytes[0], bytes[1]]
-            ))
+            Encoding::BigEndian => Ok(u16::from_be_bytes(bytes.to_array())),
+            Encoding::LittleEndian => Ok(u16::from_le_bytes(bytes.to_array())),
         }
     }
 
@@ -78,12 +92,8 @@ impl<'a> ByteReader<'a> {
         let bytes = self.read_bytes(4)?;
 
         match self.encoding {
-            Encoding::BigEndian => Ok(u32::from_be_bytes(
-                [bytes[0], bytes[1], bytes[2], bytes[3]]
-            )),
-            Encoding::LittleEndian => Ok(u32::from_le_bytes(
-                [bytes[0], bytes[1], bytes[2], bytes[3]]
-            ))
+            Encoding::BigEndian => Ok(u32::from_be_bytes(bytes.to_array())),
+            Encoding::LittleEndian => Ok(u32::from_le_bytes(bytes.to_array())),
         }
     }
 
@@ -91,12 +101,8 @@ impl<'a> ByteReader<'a> {
         let bytes = self.read_bytes(2)?;
 
         match self.encoding {
-            Encoding::BigEndian => Ok(i16::from_be_bytes(
-                [bytes[0], bytes[1]]
-            )),
-            Encoding::LittleEndian => Ok(i16::from_le_bytes(
-                [bytes[0], bytes[1]]
-            ))
+            Encoding::BigEndian => Ok(i16::from_be_bytes(bytes.to_array())),
+            Encoding::LittleEndian => Ok(i16::from_le_bytes(bytes.to_array())),
         }
     }
 
@@ -104,12 +110,8 @@ impl<'a> ByteReader<'a> {
         let bytes = self.read_bytes(4)?;
 
         match self.encoding {
-            Encoding::BigEndian => Ok(i32::from_be_bytes(
-                [bytes[0], bytes[1], bytes[2], bytes[3]]
-            )),
-            Encoding::LittleEndian => Ok(i32::from_le_bytes(
-                [bytes[0], bytes[1], bytes[2], bytes[3]]
-            ))
+            Encoding::BigEndian => Ok(i32::from_be_bytes(bytes.to_array())),
+            Encoding::LittleEndian => Ok(i32::from_le_bytes(bytes.to_array())),
         }
     }
 }

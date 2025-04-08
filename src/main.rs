@@ -1,4 +1,7 @@
+use std::path::PathBuf;
+
 use clap::Parser;
+use song::Song;
 
 mod bytereader;
 mod formats;
@@ -9,17 +12,16 @@ mod song;
 #[command(version, about, long_about = None)]
 struct Args {
     /// The file to read
-    path: String,
+    #[clap(short, long)]
+    path: PathBuf,
 }
 
-fn main() {
+fn main() -> Result<(), String> {
     let args = Args::parse();
 
-    let track = song::new(&args.path);
-    if let Err(e) = track {
-      println!("{}", e);
-      return
-    }
+    let track = Song::new(&args.path)?;
 
-    println!("Loaded!")
+    println!("Loaded!");
+
+    Ok(())
 }
