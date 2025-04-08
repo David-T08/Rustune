@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{bytereader::{ByteReader, Encoding}, formats::modfile};
+use crate::formats::modfile;
 use std::{ffi::OsStr, fs, path::Path};
 
 #[derive(Debug, Error)]
@@ -52,18 +52,6 @@ impl Song {
 
         let data = fs::read(path).map_err(|_| SongError::Io("Unrecognized format".into()))?;
 
-        Song::new_from_bytes(data)
-    }
-
-    pub fn new_from_bytes(data: Vec<u8>) -> Result<Song, SongError> {
-      let mut reader = ByteReader::new(&data, Encoding::BigEndian);
-    
-      let title = reader.read_str(20)?;
-    
-      let _sample1 = modfile::read_sample(&mut reader)?;
-    
-      dbg!(&title);
-    
-      todo!();
+        modfile::song_from_bytes(data)
     }
 }
