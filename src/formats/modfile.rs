@@ -1,17 +1,5 @@
 use crate::bytereader::{ByteReader, Encoding};
-use crate::song::{self, Song, SongError};
-
-#[allow(dead_code)]
-pub struct Sample {
-    pub name: String,
-    pub length: i32,
-
-    pub finetune: i8,
-    pub volume: i8,
-
-    pub repeat_offset: i32,
-    pub repeat_length: i32,
-}
+use crate::song::{self, Sample, Song, SongError};
 
 pub fn read_sample(reader: &mut ByteReader) -> Result<Sample, song::SongError> {
     let _name = reader.read_str(22)?;
