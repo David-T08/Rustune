@@ -7,12 +7,10 @@ pub enum Encoding {
     BigEndian,
 }
 
-// look at `byteorder`, `bytes` crates for code that provides similar existing implementations
-
 #[derive(Debug)]
 pub struct ByteReader<'a> {
     data: &'a [u8],
-    offset: usize,
+    position: usize,
     encoding: Encoding,
 }
 
@@ -38,20 +36,28 @@ impl<'a> ByteReader<'a> {
         ByteReader {
             data,
             encoding,
-            offset: 0,
+            position: 0,
         }
     }
 
+    pub fn encoding(&self) -> &Encoding {
+        &self.encoding
+    }
+
+    pub fn position(&self) -> &usize {
+        &self.position
+    }
+
     pub fn read_bytes(&mut self, count: usize) -> Result<&'a [u8], SongError> {
-        if self.offset + count > self.data.len() {
+        if self.position + count > self.data.len() {
             return Err(SongError::Read(format!(
                 "Not enough data to read {} bytes at offset {}",
-                count, self.offset
+                count, self.position
             )));
         }
 
-        let slice = &self.data[self.offset..self.offset + count];
-        self.offset += count;
+        let slice = &self.data[self.position..self.position + count];
+        self.position += count;
 
         Ok(slice)
     }
@@ -60,12 +66,13 @@ impl<'a> ByteReader<'a> {
         let bytes = self.read_bytes(length).map_err(|_| {
             SongError::Read(format!(
                 "Not enough data to read string of length {} at offset {}",
-                length, self.offset
+                length, self.position
             ))
         })?;
 
         let string = std::str::from_utf8(bytes)
             .map_err(|e| SongError::Read(format!("UTF-8 error: {}", e)))?
+            .trim_end_matches("\0")
             .to_string();
 
         Ok(string)
@@ -88,21 +95,21 @@ impl<'a> ByteReader<'a> {
         }
     }
 
-    pub fn read_u32(&mut self) -> Result<u32, SongError> {
-        let bytes = self.read_bytes(4)?;
-
-        match self.encoding {
-            Encoding::BigEndian => Ok(u32::from_be_bytes(bytes.to_array())),
-            Encoding::LittleEndian => Ok(u32::from_le_bytes(bytes.to_array())),
-        }
-    }
-
     pub fn read_i16(&mut self) -> Result<i16, SongError> {
         let bytes = self.read_bytes(2)?;
 
         match self.encoding {
             Encoding::BigEndian => Ok(i16::from_be_bytes(bytes.to_array())),
             Encoding::LittleEndian => Ok(i16::from_le_bytes(bytes.to_array())),
+        }
+    }
+
+    pub fn read_u32(&mut self) -> Result<u32, SongError> {
+        let bytes = self.read_bytes(4)?;
+
+        match self.encoding {
+            Encoding::BigEndian => Ok(u32::from_be_bytes(bytes.to_array())),
+            Encoding::LittleEndian => Ok(u32::from_le_bytes(bytes.to_array())),
         }
     }
 
