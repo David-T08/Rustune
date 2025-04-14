@@ -12,14 +12,13 @@ mod song;
 #[command(version, about, long_about = None)]
 struct Args {
     /// The file to read
-    #[clap(short, long)]
     path: PathBuf,
 }
 
 fn main() -> Result<(), String> {
     let args = Args::parse();
 
-    let track = Song::new(&args.path)?;
+    let _track = Song::new(&args.path)?;
 
     println!("Loaded!");
 

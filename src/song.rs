@@ -1,7 +1,43 @@
 use thiserror::Error;
 
 use crate::formats::modfile;
-use std::{ffi::OsStr, fs, path::Path};
+use std::{ffi::OsStr, fs, path::Path, fmt};
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub enum Tracker {
+    Generic,
+    ProTracker,
+    NoiseTracker,
+    FastTracker,
+    TakeTracker,
+    Startrekker,
+    Falcon,
+    Oktalyzer,
+    UltimateSoundTracker,
+
+    // Used for further heuristics later
+    FastOrNoiseTracker,
+}
+
+impl fmt::Display for Tracker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let formatted = match self {
+            Tracker::Generic => "Generic",
+            Tracker::ProTracker => "ProTracker",
+            Tracker::TakeTracker => "TakeTracker",
+            Tracker::FastTracker => "FastTracker",
+            Tracker::NoiseTracker => "NoiseTracker",
+            Tracker::Startrekker => "Startrekker",
+            Tracker::Falcon => "Falcon",
+            Tracker::Oktalyzer => "Oktalyzer",
+            Tracker::UltimateSoundTracker => "Ultimate SoundTracker",
+
+            Tracker::FastOrNoiseTracker => "FastTracker/NoiseTracker/ProTracker",
+        };
+        write!(f, "{}", formatted)
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum SongError {
@@ -17,41 +53,75 @@ impl From<SongError> for String {
     }
 }
 
+#[derive(Debug)]
 #[allow(dead_code)]
-pub struct Song {
-    pub name: String,
-
-    pub sample_info: Vec<Sample>,
-    pub pattern_table: Vec<i8>,
-    pub num_patterns: i8,
-
-    pub end_jump_pos: i8,
-    pub tag: String,
+pub enum PCMData {
+    U8(Vec<u8>),
+    U16(Vec<u16>)
 }
 
 #[allow(dead_code)]
+#[derive(Debug)]
+pub struct SongMetadata {
+    pub name: String,
+
+    pub pattern_count: u8,
+    pub channel_count: u8,
+
+    pub samples: Vec<Sample>,
+    pub pattern_table: Vec<u8>,
+
+    pub format: String,
+    pub end_jump: i8,
+
+    pub tracker: Tracker
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct Song {
+    pub metadata: SongMetadata,
+
+    pub patterns: Vec<Pattern>,
+    pub samples: Vec<PCMData>
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
 pub struct Sample {
     pub name: String,
-    pub length: i32,
+    pub length: u16,
 
     pub finetune: i8,
-    pub volume: i8,
+    pub volume: u8,
 
-    pub repeat_offset: i32,
-    pub repeat_length: i32,
+    pub repeat_offset: i16,
+    pub repeat_length: i16,
 }
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct Note {
+    pub sample: u8,
+    pub period: u16,
+
+    pub effect: u8,
+    pub argument: u8,
+}
+
+pub type Line = Vec<Note>;
+pub type Pattern = Vec<Line>;
 
 impl Song {
     pub fn new(path: &Path) -> Result<Song, SongError> {
-        dbg!(path);
-
         // TODO: Handle multiple formats
         if path.extension() != Some(OsStr::new("mod")) {
             return Err(SongError::Io("Unrecognized format".into()));
         }
 
         let data = fs::read(path).map_err(|_| SongError::Io("Unrecognized format".into()))?;
+        let result = modfile::parse(data);
 
-        modfile::song_from_bytes(data)
+        result
     }
 }
