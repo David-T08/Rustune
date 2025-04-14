@@ -237,7 +237,9 @@ pub fn parse(data: Vec<u8>) -> Result<Song, SongError> {
     let pattern_count = pattern_table.iter().max().unwrap_or(&0) + 1;
 
     // Skip reading the format tag, we've already read it above
-    reader.seek(reader.position() + 4)?;
+    if sample_count == 31 {
+        reader.seek(reader.position() + 4)?;
+    }
 
     let (channel_count, tracker) =
         identify_format_and_channels(&format, data.len(), &sample_metadata, pattern_count);
@@ -249,8 +251,10 @@ pub fn parse(data: Vec<u8>) -> Result<Song, SongError> {
 
     let mut samples: Vec<song::PCMData> = Vec::with_capacity(sample_count);
     for i in 0..sample_count {
+        let length = sample_metadata.get(i).unwrap().length as usize;
+
         let sample = reader
-            .read_bytes(sample_metadata.get(i).unwrap().length as usize)
+            .read_bytes(length)
             .map_err(|_| SongError::Read("Failed to read sample data".into()))?
             .to_vec();
 
