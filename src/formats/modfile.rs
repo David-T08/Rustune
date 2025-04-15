@@ -1,5 +1,6 @@
 use crate::bytereader::{ByteReader, Encoding};
-use crate::song::{self, Sample, Song, SongError, Tracker};
+use crate::song::{self, Sample, Song, SongError};
+use crate::tracker::{self, Tracker};
 
 fn read_sample(reader: &mut ByteReader) -> Result<Sample, SongError> {
     let name = reader.read_str(22)?;
@@ -12,8 +13,8 @@ fn read_sample(reader: &mut ByteReader) -> Result<Sample, SongError> {
     let finetune = if sign { -(value as i8) } else { value as i8 };
     let volume = reader.read_u8()?;
 
-    let repeat_offset = reader.read_i16()? * 2;
-    let mut repeat_length = reader.read_i16()? * 2;
+    let repeat_offset = reader.read_u16()? * 2;
+    let mut repeat_length = reader.read_u16()? * 2;
 
     // No idea why its saved as a 1 when not repeated
     if repeat_length == 2 {
@@ -157,7 +158,7 @@ fn read_note(reader: &mut ByteReader) -> Result<song::Note, SongError> {
 
     let sample: u8 = (bytes[0] & 0xF0) | ((bytes[2] & 0xF0) >> 4);
     let period: u16 = (((bytes[0] & 0x0F) as u16) << 8) | (bytes[1] as u16);
-    let effect: u8 = (bytes[2] & 0x0F) << 4;
+    let effect: u8 = bytes[2] & 0x0F;
     let argument: u8 = bytes[3];
 
     Ok(song::Note {
@@ -213,10 +214,11 @@ pub fn parse(data: Vec<u8>) -> Result<Song, SongError> {
         #[cfg(debug_assertions)]
         if sample.name.len() > 0 {
             let read_sample = format!(
-                "Read sample {} ({}/{})",
+                "Read sample {} ({}/{}) len: {}",
                 &sample.name,
                 index + 1,
-                sample_count
+                sample_count,
+                sample.length
             );
 
             dbg!(read_sample);
@@ -261,6 +263,28 @@ pub fn parse(data: Vec<u8>) -> Result<Song, SongError> {
         samples.push(song::PCMData::U8(sample));
     }
 
+    if matches!(tracker, Tracker::ProTracker) {
+        let pat = patterns.get(0).unwrap();
+
+        let mut lineno = 0;
+        pat.iter().for_each(|line| {
+            let line_str = line
+                .iter()
+                .map(|note| {
+                    let finetune = sample_metadata.get(note.sample as usize).unwrap().finetune;
+
+                    let pnote = tracker::protracker_period_to_note(note.period, finetune);
+
+                    pnote.unwrap_or(String::from("---"))
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!("{}: {}", lineno, line_str);
+
+            lineno += 1;
+        });
+    }
+
     let metadata = song::SongMetadata {
         name: title,
         samples: sample_metadata,
@@ -273,7 +297,7 @@ pub fn parse(data: Vec<u8>) -> Result<Song, SongError> {
         end_jump: end_jmp_pos,
         format,
 
-        tracker
+        tracker,
     };
 
     Ok(Song {

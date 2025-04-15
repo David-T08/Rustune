@@ -6,6 +6,7 @@ use song::Song;
 mod bytereader;
 mod formats;
 mod song;
+mod tracker;
 
 /// CLI Based tracker player
 #[derive(Parser, Debug)]

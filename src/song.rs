@@ -1,43 +1,8 @@
 use thiserror::Error;
 
 use crate::formats::modfile;
-use std::{ffi::OsStr, fs, path::Path, fmt};
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub enum Tracker {
-    Generic,
-    ProTracker,
-    NoiseTracker,
-    FastTracker,
-    TakeTracker,
-    Startrekker,
-    Falcon,
-    Oktalyzer,
-    UltimateSoundTracker,
-
-    // Used for further heuristics later
-    FastOrNoiseTracker,
-}
-
-impl fmt::Display for Tracker {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let formatted = match self {
-            Tracker::Generic => "Generic",
-            Tracker::ProTracker => "ProTracker",
-            Tracker::TakeTracker => "TakeTracker",
-            Tracker::FastTracker => "FastTracker",
-            Tracker::NoiseTracker => "NoiseTracker",
-            Tracker::Startrekker => "Startrekker",
-            Tracker::Falcon => "Falcon",
-            Tracker::Oktalyzer => "Oktalyzer",
-            Tracker::UltimateSoundTracker => "Ultimate SoundTracker",
-
-            Tracker::FastOrNoiseTracker => "FastTracker/NoiseTracker/ProTracker",
-        };
-        write!(f, "{}", formatted)
-    }
-}
+use crate::tracker::Tracker;
+use std::{ffi::OsStr, fs, path::Path};
 
 #[derive(Debug, Error)]
 pub enum SongError {
@@ -57,7 +22,7 @@ impl From<SongError> for String {
 #[allow(dead_code)]
 pub enum PCMData {
     U8(Vec<u8>),
-    U16(Vec<u16>)
+    U16(Vec<u16>),
 }
 
 #[allow(dead_code)]
@@ -74,7 +39,7 @@ pub struct SongMetadata {
     pub format: String,
     pub end_jump: i8,
 
-    pub tracker: Tracker
+    pub tracker: Tracker,
 }
 
 #[allow(dead_code)]
@@ -83,7 +48,7 @@ pub struct Song {
     pub metadata: SongMetadata,
 
     pub patterns: Vec<Pattern>,
-    pub samples: Vec<PCMData>
+    pub samples: Vec<PCMData>,
 }
 
 #[allow(dead_code)]
@@ -95,8 +60,8 @@ pub struct Sample {
     pub finetune: i8,
     pub volume: u8,
 
-    pub repeat_offset: i16,
-    pub repeat_length: i16,
+    pub repeat_offset: u16,
+    pub repeat_length: u16,
 }
 
 #[allow(dead_code)]
