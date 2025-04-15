@@ -21,8 +21,8 @@ impl From<SongError> for String {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum PCMData {
-    U8(Vec<u8>),
-    U16(Vec<u16>),
+    I8(Vec<i8>),
+    I16(Vec<i16>),
 }
 
 #[allow(dead_code)]

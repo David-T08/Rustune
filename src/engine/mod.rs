@@ -6,8 +6,8 @@ use mod_engine::ModEngine;
 
 mod mod_engine;
 
-pub enum Engine<'a> {
-    Mod(mod_engine::ModEngine<'a>),
+pub enum Engine {
+    Mod(mod_engine::ModEngine),
 }
 
 pub trait TrackerEngine {
@@ -17,7 +17,7 @@ pub trait TrackerEngine {
     fn get_audio_buffer(&mut self, buffer: &mut [f32]);
 }
 
-impl TrackerEngine for Engine<'_> {
+impl TrackerEngine for Engine {
     fn next_tick(&mut self) {
         match self {
             Engine::Mod(e) => e.next_tick(),
@@ -43,8 +43,8 @@ impl TrackerEngine for Engine<'_> {
     }
 }
 
-impl Engine<'_> {
-    pub fn new(song: &Song) -> Engine<'_> {
+impl Engine {
+    pub fn new(song: Song) -> Engine {
         match song.metadata.tracker {
             Tracker::ProTracker | Tracker::NoiseTracker => Engine::Mod(ModEngine::new(song)),
 

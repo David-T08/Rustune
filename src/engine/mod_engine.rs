@@ -4,8 +4,8 @@ use super::TrackerEngine;
 use crate::tracker::{self, Tracker};
 use crate::{song, Song};
 
-pub struct ModEngine<'a> {
-    pub song: &'a Song,
+pub struct ModEngine {
+    pub song: Song,
     pub current_row: usize,
     pub current_pattern: usize,
     // Current tick
@@ -27,6 +27,9 @@ pub struct ChannelState {
     pub effect: u8,
     pub effect_arg: u8,
 
+    // Hard left = 0; Middle = 128; Hard right = 255
+    pub panning: u8,
+
     pub position_in_sample: f32, // For mixing audio
     pub sample_step: f32,        // Based on period + sample_rate
 }
@@ -39,6 +42,7 @@ impl Default for ChannelState {
             period: 0,
             effect: 0,
             effect_arg: 0,
+            panning: 128,
 
             position_in_sample: 0.0,
             sample_step: 0.0,
@@ -46,9 +50,72 @@ impl Default for ChannelState {
     }
 }
 
-impl TrackerEngine for ModEngine<'_> {
+impl TrackerEngine for ModEngine {
     fn get_audio_buffer(&mut self, buffer: &mut [f32]) {
-        todo!();
+        // Assume stereo output (interleaved: L, R, L, R, ...)
+        let num_channels = 2;
+        let samples_per_buffer = buffer.len() / num_channels;
+
+        // For each output sample (frame)
+        for i in 0..samples_per_buffer {
+            let mut left = 0.0f32;
+            let mut right = 0.0f32;
+
+            // Mix all tracker channels
+            for (ch_idx, channel) in self.channels.iter_mut().enumerate() {
+                // Get sample data for this channel
+                let sample = match self.song.samples.get(channel.sample_index) {
+                    Some(song::PCMData::I8(data)) => data,
+                    _ => continue,
+                };
+
+                // Amiga PAL clock for MOD: 7093789.2 Hz
+                let freq = 7093789.2 / (channel.period as f32 * 2.0);
+                channel.sample_step = freq / self.sample_rate as f32;
+
+                // Fetch sample value (simple nearest-neighbor, can use interpolation for quality)
+                let pos = channel.position_in_sample as usize;
+                let sample_val = if pos < sample.len() {
+                    // Convert 8-bit sample [-128,127] to [-1.0,1.0]
+                    sample[pos] as f32 / 128.0
+                } else {
+                    0.0
+                };
+
+                // Apply volume (0..64)
+                let vol = channel.volume.min(64) as f32 / 64.0;
+                let out_val = sample_val * vol;
+
+                // Simple panning: hard left/right for 4 channels, otherwise center
+                match ch_idx % 4 {
+                    0 => left += out_val,  // Channel 1: Left
+                    1 => right += out_val, // Channel 2: Right
+                    2 => left += out_val,  // Channel 3: Left
+                    3 => right += out_val, // Channel 4: Right
+                    _ => {
+                        // For >4 channels, pan center
+                        left += out_val * 0.5;
+                        right += out_val * 0.5;
+                    }
+                }
+
+                // Advance sample position
+                channel.position_in_sample += channel.sample_step;
+
+                // Handle sample end (no looping for now)
+                if channel.position_in_sample >= sample.len() as f32 {
+                    channel.position_in_sample = sample.len() as f32;
+                }
+            }
+
+            // Clamp output to [-1.0, 1.0]
+            buffer[i * 2] = left.clamp(-1.0, 1.0);
+            buffer[i * 2 + 1] = right.clamp(-1.0, 1.0);
+          
+
+            // Advance tracker state if needed (e.g., tick, row)
+            // This is usually done per tick, not per sample, so not handled here.
+        }
     }
 
     fn sleep_duration(&self) -> std::time::Duration {
@@ -65,7 +132,7 @@ impl TrackerEngine for ModEngine<'_> {
         let line = pattern.get(self.current_row).unwrap();
 
         if self.tick == 0 {
-          print_line(pattern, &self.song.metadata.samples, self.current_row);
+            print_line(pattern, &self.song.metadata.samples, self.current_row);
         }
 
         for (index, channel) in self.channels.iter_mut().enumerate() {
@@ -91,8 +158,8 @@ impl TrackerEngine for ModEngine<'_> {
     }
 }
 
-impl<'a> ModEngine<'a> {
-    pub fn new(song: &'a Song) -> Self {
+impl ModEngine {
+    pub fn new(song: Song) -> Self {
         let mut channels = Vec::with_capacity(song.metadata.channel_count as usize);
         for _ in 0..song.metadata.channel_count {
             channels.push(ChannelState::default());
@@ -102,9 +169,11 @@ impl<'a> ModEngine<'a> {
             song,
             current_row: 0,
             current_pattern: 0,
+
             tick: 0,
             speed: 6,
             tempo: 125,
+
             channels,
             sample_rate: 44100,
         }

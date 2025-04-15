@@ -243,9 +243,11 @@ pub fn parse(data: Vec<u8>) -> Result<Song, SongError> {
         let sample = reader
             .read_bytes(length)
             .map_err(|_| SongError::Read("Failed to read sample data".into()))?
-            .to_vec();
+            .into_iter()
+            .map(|b| *b as i8)
+            .collect();
 
-        samples.push(song::PCMData::U8(sample));
+        samples.push(song::PCMData::I8(sample));
     }
 
     let metadata = song::SongMetadata {
