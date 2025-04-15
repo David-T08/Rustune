@@ -208,23 +208,8 @@ pub fn parse(data: Vec<u8>) -> Result<Song, SongError> {
     let title = reader.read_str(20)?;
     let mut sample_metadata: Vec<Sample> = Vec::with_capacity(sample_count);
 
-    for index in 0..sample_count {
-        let sample = read_sample(&mut reader)?;
-
-        #[cfg(debug_assertions)]
-        if sample.name.len() > 0 {
-            let read_sample = format!(
-                "Read sample {} ({}/{}) len: {}",
-                &sample.name,
-                index + 1,
-                sample_count,
-                sample.length
-            );
-
-            dbg!(read_sample);
-        }
-
-        sample_metadata.push(sample);
+    for _ in 0..sample_count {
+        sample_metadata.push(read_sample(&mut reader)?);
     }
 
     // Patterns played, we can skip this (I think?)
@@ -261,28 +246,6 @@ pub fn parse(data: Vec<u8>) -> Result<Song, SongError> {
             .to_vec();
 
         samples.push(song::PCMData::U8(sample));
-    }
-
-    if matches!(tracker, Tracker::ProTracker) {
-        let pat = patterns.get(0).unwrap();
-
-        let mut lineno = 0;
-        pat.iter().for_each(|line| {
-            let line_str = line
-                .iter()
-                .map(|note| {
-                    let finetune = sample_metadata.get(note.sample as usize).unwrap().finetune;
-
-                    let pnote = tracker::protracker_period_to_note(note.period, finetune);
-
-                    pnote.unwrap_or(String::from("---"))
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-            println!("{}: {}", lineno, line_str);
-
-            lineno += 1;
-        });
     }
 
     let metadata = song::SongMetadata {

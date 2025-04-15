@@ -154,7 +154,7 @@ impl<'a> ByteReader<'a> {
     }
 
     /// Read an unsigned byte
-    /// 
+    ///
     /// # Errors
     /// When there is not enough data to be read
     pub fn read_u8(&mut self) -> Result<u8, SongError> {
@@ -162,7 +162,7 @@ impl<'a> ByteReader<'a> {
     }
 
     /// Read a signed byte
-    /// 
+    ///
     /// # Errors
     /// When there is not enough data to be read
     pub fn read_i8(&mut self) -> Result<i8, SongError> {
@@ -170,7 +170,7 @@ impl<'a> ByteReader<'a> {
     }
 
     /// Read a unsigned 16-bit integer, accounting for the byteorder automatically
-    /// 
+    ///
     /// # Errors
     /// When there is not enough data to be read
     pub fn read_u16(&mut self) -> Result<u16, SongError> {
@@ -183,7 +183,7 @@ impl<'a> ByteReader<'a> {
     }
 
     /// Read a signed 16-bit integer, accounting for the byteorder automatically
-    /// 
+    ///
     /// # Errors
     /// When there is not enough data to be read
     pub fn read_i16(&mut self) -> Result<i16, SongError> {
@@ -196,7 +196,7 @@ impl<'a> ByteReader<'a> {
     }
 
     /// Read a unsigned 32-bit integer, accounting for the byteorder automatically
-    /// 
+    ///
     /// # Errors
     /// When there is not enough data to be read
     pub fn read_u32(&mut self) -> Result<u32, SongError> {
@@ -209,7 +209,7 @@ impl<'a> ByteReader<'a> {
     }
 
     /// Read a signed 32-bit integer, accounting for the byteorder automatically
-    /// 
+    ///
     /// # Errors
     /// When there is not enough data to be read
     pub fn read_i32(&mut self) -> Result<i32, SongError> {

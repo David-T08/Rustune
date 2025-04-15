@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::formats::modfile;
+use crate::formats::mod_loader;
 use crate::tracker::Tracker;
 use std::{ffi::OsStr, fs, path::Path};
 
@@ -85,7 +85,7 @@ impl Song {
         }
 
         let data = fs::read(path).map_err(|_| SongError::Io("Unrecognized format".into()))?;
-        let result = modfile::parse(data);
+        let result = mod_loader::parse(data);
 
         result
     }
