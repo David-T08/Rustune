@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::tracker::Tracker;
 use crate::Song;
 use mod_engine::ModEngine;
@@ -12,21 +10,19 @@ pub enum Engine {
 
 pub trait TrackerEngine {
     fn next_tick(&mut self);
-    fn sleep_duration(&self) -> Duration;
     fn is_finished(&self) -> bool;
     fn get_audio_buffer(&mut self, buffer: &mut [f32]);
+
+    fn samples_since_tick(&self) -> usize;
+    fn set_samples_since_tick(&mut self, value: usize);
+    fn samples_per_tick(&self) -> usize;
+    fn set_samples_per_tick(&mut self, value: usize);
 }
 
 impl TrackerEngine for Engine {
     fn next_tick(&mut self) {
         match self {
             Engine::Mod(e) => e.next_tick(),
-        }
-    }
-
-    fn sleep_duration(&self) -> Duration {
-        match self {
-            Engine::Mod(e) => e.sleep_duration(),
         }
     }
 
@@ -41,12 +37,39 @@ impl TrackerEngine for Engine {
             Engine::Mod(e) => e.get_audio_buffer(buffer),
         }
     }
+
+    fn samples_since_tick(&self) -> usize {
+        match self {
+            Engine::Mod(e) => e.samples_since_tick(),
+        }
+    }
+    fn set_samples_since_tick(&mut self, value: usize) {
+        match self {
+            Engine::Mod(e) => e.set_samples_since_tick(value),
+        }
+    }
+    fn samples_per_tick(&self) -> usize {
+        match self {
+            Engine::Mod(e) => e.samples_per_tick(),
+        }
+    }
+    fn set_samples_per_tick(&mut self, value: usize) {
+        match self {
+            Engine::Mod(e) => e.set_samples_per_tick(value),
+        }
+    }
 }
 
 impl Engine {
-    pub fn new(song: Song) -> Engine {
+    pub fn new(
+        song: Song,
+        sample_rate: cpal::SampleRate,
+        channel_count: cpal::ChannelCount,
+    ) -> Engine {
         match song.metadata.tracker {
-            Tracker::ProTracker | Tracker::NoiseTracker => Engine::Mod(ModEngine::new(song)),
+            Tracker::ProTracker | Tracker::NoiseTracker => {
+                Engine::Mod(ModEngine::new(song, sample_rate, channel_count))
+            }
 
             _ => todo!(),
         }

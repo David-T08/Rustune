@@ -84,7 +84,7 @@ impl Song {
             return Err(SongError::Io("Unrecognized format".into()));
         }
 
-        let data = fs::read(path).map_err(|_| SongError::Io("Unrecognized format".into()))?;
+        let data = fs::read(path).map_err(|e| SongError::Io(format!("Failed to read: {e}")))?;
         let result = mod_loader::parse(data);
 
         result

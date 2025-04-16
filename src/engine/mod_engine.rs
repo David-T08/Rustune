@@ -1,13 +1,15 @@
-use std::time::Duration;
-
 use super::TrackerEngine;
-use crate::tracker::{self, Tracker};
+use crate::tracker;
 use crate::{song, Song};
 
 pub struct ModEngine {
     pub song: Song,
     pub current_row: usize,
     pub current_pattern: usize,
+
+    pub samples_since_tick: usize,
+    pub samples_per_tick: usize,
+
     // Current tick
     pub tick: u8,
     // Ticks per row (How many ticks before advancing to next row)
@@ -16,7 +18,10 @@ pub struct ModEngine {
     pub tempo: u16,
 
     pub channels: Vec<ChannelState>, // One per channel (e.g. 4)
+
+    // Output device
     pub sample_rate: u32,
+    pub channel_count: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -32,6 +37,11 @@ pub struct ChannelState {
 
     pub position_in_sample: f32, // For mixing audio
     pub sample_step: f32,        // Based on period + sample_rate
+
+    pub base_period: u16,
+
+    pub repeat_offset: u16,
+    pub repeat_length: u16,
 }
 
 impl Default for ChannelState {
@@ -42,19 +52,39 @@ impl Default for ChannelState {
             period: 0,
             effect: 0,
             effect_arg: 0,
-            panning: 128,
+            panning: 128,//192,
+
+            repeat_offset: 0,
+            repeat_length: 0,
 
             position_in_sample: 0.0,
             sample_step: 0.0,
+
+            base_period: 0,
         }
     }
 }
 
 impl TrackerEngine for ModEngine {
+    fn samples_per_tick(&self) -> usize {
+        self.samples_per_tick
+    }
+
+    fn set_samples_per_tick(&mut self, value: usize) {
+        self.samples_per_tick = value;
+    }
+
+    fn samples_since_tick(&self) -> usize {
+        self.samples_since_tick
+    }
+
+    fn set_samples_since_tick(&mut self, value: usize) {
+        self.samples_since_tick = value;
+    }
+
     fn get_audio_buffer(&mut self, buffer: &mut [f32]) {
-        // Assume stereo output (interleaved: L, R, L, R, ...)
-        let num_channels = 2;
-        let samples_per_buffer = buffer.len() / num_channels;
+        let num_channels = self.channel_count as usize;
+        let samples_per_buffer = buffer.len() / num_channels as usize;
 
         // For each output sample (frame)
         for i in 0..samples_per_buffer {
@@ -62,16 +92,12 @@ impl TrackerEngine for ModEngine {
             let mut right = 0.0f32;
 
             // Mix all tracker channels
-            for (ch_idx, channel) in self.channels.iter_mut().enumerate() {
+            for (_, channel) in self.channels.iter_mut().enumerate() {
                 // Get sample data for this channel
-                let sample = match self.song.samples.get(channel.sample_index) {
-                    Some(song::PCMData::I8(data)) => data,
+                let sample = match &self.song.samples[channel.sample_index] {
+                    song::PCMData::I8(data) => data,
                     _ => continue,
                 };
-
-                // Amiga PAL clock for MOD: 7093789.2 Hz
-                let freq = 7093789.2 / (channel.period as f32 * 2.0);
-                channel.sample_step = freq / self.sample_rate as f32;
 
                 // Fetch sample value (simple nearest-neighbor, can use interpolation for quality)
                 let pos = channel.position_in_sample as usize;
@@ -86,40 +112,21 @@ impl TrackerEngine for ModEngine {
                 let vol = channel.volume.min(64) as f32 / 64.0;
                 let out_val = sample_val * vol;
 
-                // Simple panning: hard left/right for 4 channels, otherwise center
-                match ch_idx % 4 {
-                    0 => left += out_val,  // Channel 1: Left
-                    1 => right += out_val, // Channel 2: Right
-                    2 => left += out_val,  // Channel 3: Left
-                    3 => right += out_val, // Channel 4: Right
-                    _ => {
-                        // For >4 channels, pan center
-                        left += out_val * 0.5;
-                        right += out_val * 0.5;
-                    }
-                }
+                let pan = channel.panning as f32 / 255.0;
+                left += out_val * (1.0 - pan);
+                right += out_val * pan;
 
-                // Advance sample position
                 channel.position_in_sample += channel.sample_step;
-
-                // Handle sample end (no looping for now)
-                if channel.position_in_sample >= sample.len() as f32 {
-                    channel.position_in_sample = sample.len() as f32;
-                }
             }
 
-            // Clamp output to [-1.0, 1.0]
-            buffer[i * 2] = left.clamp(-1.0, 1.0);
-            buffer[i * 2 + 1] = right.clamp(-1.0, 1.0);
-          
-
-            // Advance tracker state if needed (e.g., tick, row)
-            // This is usually done per tick, not per sample, so not handled here.
+            for ch in 0..num_channels {
+                buffer[i * num_channels + ch] = match ch {
+                    0 => left.clamp(-1.0, 1.0),  // Left
+                    1 => right.clamp(-1.0, 1.0), // Right
+                    _ => 0.0,                    // Silence for other channels
+                };
+            }
         }
-    }
-
-    fn sleep_duration(&self) -> std::time::Duration {
-        return Duration::from_secs_f32(2.5 / self.tempo as f32);
     }
 
     fn is_finished(&self) -> bool {
@@ -127,9 +134,8 @@ impl TrackerEngine for ModEngine {
     }
 
     fn next_tick(&mut self) {
-        // On tick 0 we read all the notes and trigger effects
-        let pattern = self.song.patterns.get(self.current_pattern).unwrap();
-        let line = pattern.get(self.current_row).unwrap();
+        let pattern = &self.song.patterns[self.current_pattern];
+        let line = &pattern[self.current_row];
 
         if self.tick == 0 {
             print_line(pattern, &self.song.metadata.samples, self.current_row);
@@ -138,32 +144,91 @@ impl TrackerEngine for ModEngine {
         for (index, channel) in self.channels.iter_mut().enumerate() {
             if self.tick == 0 {
                 let note = line.get(index).unwrap();
-                channel.effect = note.effect;
-                channel.effect_arg = note.argument;
-                channel.period = note.period;
-                channel.sample_index = note.sample as usize;
+                let new_period = note.period;
+                let mut new_sample_index = note.sample as usize;
 
-                channel.position_in_sample = 0.0;
-                channel.sample_step = 0.0;
+                if new_period != 0 {
+                    if new_sample_index == 0 {
+                        new_sample_index = channel.sample_index;
+                    }
+
+                    channel.position_in_sample = 0.0;
+                    channel.base_period = new_period;
+
+                    // Set repeat info from sample metadata
+                    if new_sample_index > 0 {
+                        let sample_meta = &self.song.metadata.samples[new_sample_index - 1];
+                        channel.repeat_offset = sample_meta.repeat_offset;
+                        channel.repeat_length = sample_meta.repeat_length;
+                        channel.volume = sample_meta.volume.min(64);
+                        channel.sample_index = new_sample_index - 1;
+                    }
+
+                    channel.effect = note.effect;
+                    channel.effect_arg = note.argument;
+                    channel.period = channel.base_period;
+                    channel.sample_step = 0.0;
+                } else if note.sample != 0 {
+                    // Instrument only: update instrument, but do NOT reset position or period
+                    let sample_meta = &self.song.metadata.samples[new_sample_index - 1];
+                    channel.repeat_offset = sample_meta.repeat_offset;
+                    channel.repeat_length = sample_meta.repeat_length;
+                    channel.volume = sample_meta.volume.min(64);
+
+                    channel.sample_index = new_sample_index - 1;
+                    channel.effect = note.effect;
+                    channel.effect_arg = note.argument;
+                } else {
+                    // Effect only: just update effect/argument
+                    channel.effect = note.effect;
+                    channel.effect_arg = note.argument;
+                }
             }
 
             process_effects(channel, self.tick);
+
+            // Amiga PAL clock for MOD: 7093789.2 Hz
+            if channel.period != 0 {
+                let freq = 7093789.2 / (channel.period as f32 * 2.0);
+
+                channel.sample_step = freq / self.sample_rate as f32;
+            }
         }
 
         self.tick += 1;
-        if self.tick > self.speed {
+        if self.tick >= self.speed {
             self.tick = 0;
             self.current_row += 1;
+
+            if self.current_row == 64 {
+                self.current_row = 0;
+                self.current_pattern += 1;
+
+                // Optionally, loop back to the first pattern if at the end of the song
+                if self.current_pattern >= self.song.patterns.len() {
+                    self.current_pattern = 0;
+                }
+
+                println!("Playing pattern: {}", self.current_pattern);
+            }
         }
     }
 }
 
 impl ModEngine {
-    pub fn new(song: Song) -> Self {
+    pub fn new(
+        song: Song,
+        sample_rate: cpal::SampleRate,
+        channel_count: cpal::ChannelCount,
+    ) -> Self {
         let mut channels = Vec::with_capacity(song.metadata.channel_count as usize);
         for _ in 0..song.metadata.channel_count {
             channels.push(ChannelState::default());
         }
+
+        let tempo = 125;
+        let tick_duration = 2.5 / tempo as f32;
+        let samples_per_tick = (sample_rate.0 as f32 * tick_duration) as usize;
 
         ModEngine {
             song,
@@ -172,10 +237,15 @@ impl ModEngine {
 
             tick: 0,
             speed: 6,
-            tempo: 125,
+            tempo,
+
+            channel_count,
+
+            samples_per_tick,
+            samples_since_tick: 0,
 
             channels,
-            sample_rate: 44100,
+            sample_rate: 48000,
         }
     }
 }
@@ -213,7 +283,7 @@ fn process_effects(channel: &mut ChannelState, tick: u8) {
                     2 => y,
                     _ => 0,
                 };
-                channel.period = channel.period.saturating_add(offset as u16);
+                channel.period = channel.base_period.saturating_add(offset as u16);
             }
         }
 
@@ -221,7 +291,8 @@ fn process_effects(channel: &mut ChannelState, tick: u8) {
         0x1 => {
             if tick > 0 {
                 let step = channel.effect_arg as u16;
-                channel.period = channel.period.saturating_sub(step);
+                channel.period = channel.base_period.saturating_sub(step);
+                channel.base_period = channel.period;
             }
         }
 
@@ -229,19 +300,20 @@ fn process_effects(channel: &mut ChannelState, tick: u8) {
         0x2 => {
             if tick > 0 {
                 let step = channel.effect_arg as u16;
-                channel.period = channel.period.saturating_add(step);
+                channel.period = channel.base_period.saturating_add(step);
+                channel.base_period = channel.period;
             }
         }
 
         // 0x3: Tone Portamento
         0x3 => {
             if tick > 0 {
-                let target_period = channel.period; // TODO: Set this based on the note
+                let target_period = channel.period;
                 let step = channel.effect_arg as u16;
                 if channel.period > target_period {
-                    channel.period = channel.period.saturating_sub(step);
+                    channel.period = channel.base_period.saturating_sub(step);
                 } else if channel.period < target_period {
-                    channel.period = channel.period.saturating_add(step);
+                    channel.period = channel.base_period.saturating_add(step);
                 }
             }
         }
@@ -300,13 +372,13 @@ fn process_effects(channel: &mut ChannelState, tick: u8) {
                 // E1x: Fine Portamento Up
                 0x1 => {
                     if tick == 0 {
-                        channel.period = channel.period.saturating_sub(sub_arg as u16);
+                        channel.period = channel.base_period.saturating_sub(sub_arg as u16);
                     }
                 }
                 // E2x: Fine Portamento Down
                 0x2 => {
                     if tick == 0 {
-                        channel.period = channel.period.saturating_add(sub_arg as u16);
+                        channel.period = channel.base_period.saturating_add(sub_arg as u16);
                     }
                 }
                 // E9x: Retrigger Note

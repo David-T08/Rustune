@@ -1,6 +1,6 @@
 use crate::bytereader::{ByteReader, Encoding};
 use crate::song::{self, Sample, Song, SongError};
-use crate::tracker::{self, Tracker};
+use crate::tracker::Tracker;
 
 fn read_sample(reader: &mut ByteReader) -> Result<Sample, SongError> {
     let name = reader.read_str(22)?;
