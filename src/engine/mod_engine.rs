@@ -42,6 +42,8 @@ pub struct ChannelState {
 
     pub repeat_offset: u16,
     pub repeat_length: u16,
+
+    pub arp_counter: u8,
 }
 
 impl Default for ChannelState {
@@ -52,7 +54,7 @@ impl Default for ChannelState {
             period: 0,
             effect: 0,
             effect_arg: 0,
-            panning: 128,//192,
+            panning: 128, //192,
 
             repeat_offset: 0,
             repeat_length: 0,
@@ -61,6 +63,7 @@ impl Default for ChannelState {
             sample_step: 0.0,
 
             base_period: 0,
+            arp_counter: 0,
         }
     }
 }
@@ -154,6 +157,7 @@ impl TrackerEngine for ModEngine {
 
                     channel.position_in_sample = 0.0;
                     channel.base_period = new_period;
+                    channel.arp_counter = 0;
 
                     // Set repeat info from sample metadata
                     if new_sample_index > 0 {
@@ -236,7 +240,7 @@ impl ModEngine {
             current_pattern: 0,
 
             tick: 0,
-            speed: 6,
+            speed: 8,
             tempo,
 
             channel_count,
@@ -277,13 +281,23 @@ fn process_effects(channel: &mut ChannelState, tick: u8) {
                     return;
                 }
 
-                // Cycle between base note, base note + x, and base note + y
-                let offset = match tick % 3 {
-                    1 => x,
-                    2 => y,
-                    _ => 0,
-                };
-                channel.period = channel.base_period.saturating_add(offset as u16);
+                if tick == 0 || tick == 1 {
+                    // On tick 0 and 1, play the actual note (no change)
+                    if tick == 1 {
+                        channel.arp_counter = 1;
+                    } else {
+                        channel.arp_counter = 0;
+                    }
+                    channel.period = channel.base_period;
+                } else {
+                    let offset = match channel.arp_counter % 3 {
+                        1 => x,
+                        2 => y,
+                        _ => 0,
+                    };
+                    channel.period = channel.base_period.saturating_add(offset as u16);
+                    channel.arp_counter = channel.arp_counter.wrapping_add(1);
+                }
             }
         }
 
