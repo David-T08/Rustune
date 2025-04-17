@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
@@ -29,52 +31,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .default_output_device()
         .expect("No output device available");
 
-    let config: cpal::StreamConfig = device
-        .default_output_config()
-        .expect("Failed to get audio configuration")
-        .into();
+    let config = device.default_output_config();
 
     let args = Args::parse();
     let track = Song::new(&args.path)?;
 
-    let engine = Arc::new(Mutex::new(Engine::new(
-        track,
-        config.sample_rate,
-        config.channels,
-    )));
+    let engine = Arc::new(Mutex::new(Engine::new(track)));
 
-    let audio_engine = Arc::clone(&engine);
+    
+    if config.is_ok() {
+        println!("Audio detected");
+        println!("Playing pattern: 0");
+        let config: cpal::StreamConfig = config.unwrap().into();
 
-    let stream = device.build_output_stream(
-        &config,
-        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-            let mut engine = audio_engine.lock().unwrap();
-            engine.get_audio_buffer(data);
+        let audio_engine = Arc::clone(&engine);
+        engine.lock().unwrap().set_channel_count(config.channels);
+        engine.lock().unwrap().set_sample_rate(config.sample_rate.0);
 
-            // Calculate how many frames (samples per channel) were rendered
-            let frames_rendered = data.len() / config.channels as usize;
+        let stream = device.build_output_stream(
+            &config,
+            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                let mut engine = audio_engine.lock().unwrap();
+                engine.get_audio_buffer(data);
 
-            let samples_since_tick = engine.samples_since_tick();
-            engine.set_samples_since_tick(samples_since_tick + frames_rendered);
-
-            // Advance tracker state as needed
-            while engine.samples_since_tick() >= engine.samples_per_tick() {
-                engine.next_tick();
+                // Calculate how many frames (samples per channel) were rendered
+                let frames_rendered = data.len() / config.channels as usize;
 
                 let samples_since_tick = engine.samples_since_tick();
-                let samples_per_tick = engine.samples_per_tick();
+                engine.set_samples_since_tick(samples_since_tick + frames_rendered);
 
-                engine.set_samples_since_tick(samples_since_tick - samples_per_tick);
+                // Advance tracker state as needed
+                while engine.samples_since_tick() >= engine.samples_per_tick() {
+                    engine.next_tick();
+
+                    let samples_since_tick = engine.samples_since_tick();
+                    let samples_per_tick = engine.samples_per_tick();
+
+                    engine.set_samples_since_tick(samples_since_tick - samples_per_tick);
+                }
+            },
+            move |err| {
+                eprintln!("Audio stream error: {}", err);
+            },
+            None,
+        )?;
+       
+        stream.play()?;
+    } else {
+        println!("No audio detected");
+        println!("Playing pattern: 0");
+
+        let engine = Arc::clone(&engine);
+        thread::spawn(move || loop {
+            if engine.lock().unwrap().is_finished() {
+                break;
             }
-        },
-        move |err| {
-            eprintln!("Audio stream error: {}", err);
-        },
-        None,
-    )?;
 
-    println!("Playing pattern: 0");
-    stream.play()?;
+            engine.lock().unwrap().next_tick();
+
+            std::thread::sleep(Duration::from_secs_f32(
+                engine.lock().unwrap().tick_duration(),
+            ));
+        });
+    }
 
     loop {
         if engine.lock().unwrap().is_finished() {

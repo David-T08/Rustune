@@ -16,7 +16,14 @@ pub trait TrackerEngine {
     fn samples_since_tick(&self) -> usize;
     fn set_samples_since_tick(&mut self, value: usize);
     fn samples_per_tick(&self) -> usize;
-    fn set_samples_per_tick(&mut self, value: usize);
+
+    fn sample_rate(&self) -> u32;
+    fn set_sample_rate(&mut self, value: u32);
+
+    fn channel_count(&self) -> u16;
+    fn set_channel_count(&mut self, value: u16);
+
+    fn tick_duration(&self) -> f32;
 }
 
 impl TrackerEngine for Engine {
@@ -53,23 +60,42 @@ impl TrackerEngine for Engine {
             Engine::Mod(e) => e.samples_per_tick(),
         }
     }
-    fn set_samples_per_tick(&mut self, value: usize) {
+
+    fn sample_rate(&self) -> u32 {
         match self {
-            Engine::Mod(e) => e.set_samples_per_tick(value),
+            Engine::Mod(e) => e.sample_rate(),
+        }
+    }
+
+    fn set_sample_rate(&mut self, value: u32) {
+        match self {
+            Engine::Mod(e) => e.set_sample_rate(value),
+        }
+    }
+
+    fn channel_count(&self) -> u16 {
+        match self {
+            Engine::Mod(e) => e.channel_count(),
+        }
+    }
+
+    fn set_channel_count(&mut self, value: u16) {
+        match self {
+            Engine::Mod(e) => e.set_channel_count(value),
+        }
+    }
+
+    fn tick_duration(&self) -> f32 {
+        match self {
+            Engine::Mod(e) => e.tick_duration(),
         }
     }
 }
 
 impl Engine {
-    pub fn new(
-        song: Song,
-        sample_rate: cpal::SampleRate,
-        channel_count: cpal::ChannelCount,
-    ) -> Engine {
+    pub fn new(song: Song) -> Engine {
         match song.metadata.tracker {
-            Tracker::ProTracker | Tracker::NoiseTracker => {
-                Engine::Mod(ModEngine::new(song, sample_rate, channel_count))
-            }
+            Tracker::ProTracker | Tracker::NoiseTracker => Engine::Mod(ModEngine::new(song)),
 
             _ => todo!(),
         }

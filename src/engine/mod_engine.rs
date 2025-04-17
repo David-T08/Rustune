@@ -2,13 +2,22 @@ use super::TrackerEngine;
 use crate::tracker;
 use crate::{song, Song};
 
+macro_rules! define_getter_setter {
+    ($getter:ident, $setter:ident, $type:ty) => {
+        fn $getter(&self) -> $type {
+            self.$getter
+        }
+
+        fn $setter(&mut self, value: $type) {
+            self.$getter = value;
+        }
+    };
+}
+
 pub struct ModEngine {
     pub song: Song,
     pub current_row: usize,
     pub current_pattern: usize,
-
-    pub samples_since_tick: usize,
-    pub samples_per_tick: usize,
 
     // Current tick
     pub tick: u8,
@@ -17,11 +26,18 @@ pub struct ModEngine {
     // BPM (determines how long a tick lasts)
     pub tempo: u16,
 
-    pub channels: Vec<ChannelState>, // One per channel (e.g. 4)
+    pub channels: Vec<ChannelState>,
 
-    // Output device
+    // Used by the main thread to advance, only if no audio output is used
+    pub tick_duration: f32,
+
+    // Audio output device
     pub sample_rate: u32,
     pub channel_count: u16,
+
+    // Used by the audio thread to advance
+    pub samples_since_tick: usize,
+    pub samples_per_tick: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -68,21 +84,182 @@ impl Default for ChannelState {
     }
 }
 
+impl ChannelState {
+    fn process_effects(&mut self, tick: u8) {
+        match self.effect {
+            // 0x0: Arpeggio
+            0x0 => {
+                if tick > 0 {
+                    let x = (self.effect_arg & 0xF0) >> 4;
+                    let y = self.effect_arg & 0x0F;
+                    if x == 0 && y == 0 {
+                        return;
+                    }
+
+                    if tick == 0 || tick == 1 {
+                        // On tick 0 and 1, play the actual note (no change)
+                        if tick == 1 {
+                            self.arp_counter = 1;
+                        } else {
+                            self.arp_counter = 0;
+                        }
+                        self.period = self.base_period;
+                    } else {
+                        let offset = match self.arp_counter % 3 {
+                            1 => x,
+                            2 => y,
+                            _ => 0,
+                        };
+                        self.period = self.base_period.saturating_add(offset as u16);
+                        self.arp_counter = self.arp_counter.wrapping_add(1);
+                    }
+                }
+            }
+
+            // 0x1: Portamento Up
+            0x1 => {
+                if tick > 0 {
+                    let step = self.effect_arg as u16;
+                    self.period = self.base_period.saturating_sub(step);
+                    self.base_period = self.period;
+                }
+            }
+
+            // 0x2: Portamento Down
+            0x2 => {
+                if tick > 0 {
+                    let step = self.effect_arg as u16;
+                    self.period = self.base_period.saturating_add(step);
+                    self.base_period = self.period;
+                }
+            }
+
+            // 0x3: Tone Portamento
+            0x3 => {
+                if tick > 0 {
+                    let target_period = self.period;
+                    let step = self.effect_arg as u16;
+                    if self.period > target_period {
+                        self.period = self.base_period.saturating_sub(step);
+                    } else if self.period < target_period {
+                        self.period = self.base_period.saturating_add(step);
+                    }
+                }
+            }
+
+            // 0x4: Vibrato
+            0x4 => {
+                if tick > 0 {
+                    let speed = (self.effect_arg & 0xF0) >> 4; // High nibble
+                    let depth = self.effect_arg & 0x0F; // Low nibble
+                                                        // TODO: Implement vibrato logic using a sine wave table
+                }
+            }
+
+            // 0xA: Volume Slide
+            0xA => {
+                if tick > 0 {
+                    let slide_up = (self.effect_arg & 0xF0) >> 4; // High nibble
+                    let slide_down = self.effect_arg & 0x0F; // Low nibble
+                    if slide_up > 0 {
+                        self.volume = self.volume.saturating_add(slide_up);
+                    } else if slide_down > 0 {
+                        self.volume = self.volume.saturating_sub(slide_down);
+                    }
+                }
+            }
+
+            // 0xB: Position Jump
+            0xB => {
+                if tick == 0 {
+                    // Position Jump (Bxx): Jumps to a specific pattern
+                    // TODO: Implement position jump logic in the engine
+                }
+            }
+
+            // 0xC: Set Volume
+            0xC => {
+                if tick == 0 {
+                    // Set Volume (Cxx): Sets the volume to xx
+                    self.volume = self.effect_arg.min(64); // Clamp to max volume of 64
+                }
+            }
+
+            // 0xD: Pattern Break
+            0xD => {
+                if tick == 0 {
+                    // Pattern Break (Dxx): Jumps to a specific row in the next pattern
+                    // TODO: Implement pattern break logic in the engine
+                }
+            }
+
+            // 0xE: Extended Effects
+            0xE => {
+                let sub_effect = (self.effect_arg & 0xF0) >> 4; // High nibble
+                let sub_arg = self.effect_arg & 0x0F; // Low nibble
+                match sub_effect {
+                    // E1x: Fine Portamento Up
+                    0x1 => {
+                        if tick == 0 {
+                            self.period = self.base_period.saturating_sub(sub_arg as u16);
+                        }
+                    }
+                    // E2x: Fine Portamento Down
+                    0x2 => {
+                        if tick == 0 {
+                            self.period = self.base_period.saturating_add(sub_arg as u16);
+                        }
+                    }
+                    // E9x: Retrigger Note
+                    0x9 => {
+                        if tick % sub_arg == 0 {
+                            // TODO: Retrigger the note
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // 0xF: Set Speed/Tempo
+            0xF => {
+                if tick == 0 {
+                    if self.effect_arg <= 0x1F {
+                        // Set speed (ticks per row)
+                        // TODO: Update the engine's speed
+                    } else {
+                        // Set tempo (BPM)
+                        // TODO: Update the engine's tempo
+                    }
+                }
+            }
+
+            _ => {
+                // Unknown effect
+                //eprintln!("Unknown effect: {:X}", self.effect);
+            }
+        }
+    }
+}
+
 impl TrackerEngine for ModEngine {
+    define_getter_setter!(samples_since_tick, set_samples_since_tick, usize);
+    define_getter_setter!(channel_count, set_channel_count, u16);
+
     fn samples_per_tick(&self) -> usize {
         self.samples_per_tick
     }
 
-    fn set_samples_per_tick(&mut self, value: usize) {
-        self.samples_per_tick = value;
+    fn tick_duration(&self) -> f32 {
+        self.tick_duration
     }
 
-    fn samples_since_tick(&self) -> usize {
-        self.samples_since_tick
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
     }
 
-    fn set_samples_since_tick(&mut self, value: usize) {
-        self.samples_since_tick = value;
+    fn set_sample_rate(&mut self, value: u32) {
+        self.sample_rate = value;
+        self.update_samples_per_tick();
     }
 
     fn get_audio_buffer(&mut self, buffer: &mut [f32]) {
@@ -189,7 +366,7 @@ impl TrackerEngine for ModEngine {
                 }
             }
 
-            process_effects(channel, self.tick);
+            channel.process_effects(self.tick);
 
             // Amiga PAL clock for MOD: 7093789.2 Hz
             if channel.period != 0 {
@@ -220,19 +397,11 @@ impl TrackerEngine for ModEngine {
 }
 
 impl ModEngine {
-    pub fn new(
-        song: Song,
-        sample_rate: cpal::SampleRate,
-        channel_count: cpal::ChannelCount,
-    ) -> Self {
+    pub fn new(song: Song) -> Self {
         let mut channels = Vec::with_capacity(song.metadata.channel_count as usize);
         for _ in 0..song.metadata.channel_count {
             channels.push(ChannelState::default());
         }
-
-        let tempo = 125;
-        let tick_duration = 2.5 / tempo as f32;
-        let samples_per_tick = (sample_rate.0 as f32 * tick_duration) as usize;
 
         ModEngine {
             song,
@@ -240,17 +409,29 @@ impl ModEngine {
             current_pattern: 0,
 
             tick: 0,
-            speed: 8,
-            tempo,
+            speed: 6,
+            tempo: 125,
+            tick_duration: 2.5 / 125.0,
 
-            channel_count,
+            channel_count: 0,
 
-            samples_per_tick,
+            samples_per_tick: 0,
             samples_since_tick: 0,
 
             channels,
-            sample_rate: 48000,
+            sample_rate: 0,
         }
+    }
+
+    fn update_samples_per_tick(&mut self) {
+        self.samples_per_tick = (self.sample_rate as f32 * self.tick_duration) as usize
+    }
+
+    fn set_tempo(&mut self, tempo: u16) {
+        self.tempo = tempo;
+        self.tick_duration = 2.5 / tempo as f32;
+
+        self.update_samples_per_tick();
     }
 }
 
@@ -268,159 +449,4 @@ fn print_line(pattern: &song::Pattern, sample_metadata: &Vec<song::Sample>, line
         .join(" ");
 
     println!("{:02}: {}", lineno, line_str);
-}
-
-fn process_effects(channel: &mut ChannelState, tick: u8) {
-    match channel.effect {
-        // 0x0: Arpeggio
-        0x0 => {
-            if tick > 0 {
-                let x = (channel.effect_arg & 0xF0) >> 4;
-                let y = channel.effect_arg & 0x0F;
-                if x == 0 && y == 0 {
-                    return;
-                }
-
-                if tick == 0 || tick == 1 {
-                    // On tick 0 and 1, play the actual note (no change)
-                    if tick == 1 {
-                        channel.arp_counter = 1;
-                    } else {
-                        channel.arp_counter = 0;
-                    }
-                    channel.period = channel.base_period;
-                } else {
-                    let offset = match channel.arp_counter % 3 {
-                        1 => x,
-                        2 => y,
-                        _ => 0,
-                    };
-                    channel.period = channel.base_period.saturating_add(offset as u16);
-                    channel.arp_counter = channel.arp_counter.wrapping_add(1);
-                }
-            }
-        }
-
-        // 0x1: Portamento Up
-        0x1 => {
-            if tick > 0 {
-                let step = channel.effect_arg as u16;
-                channel.period = channel.base_period.saturating_sub(step);
-                channel.base_period = channel.period;
-            }
-        }
-
-        // 0x2: Portamento Down
-        0x2 => {
-            if tick > 0 {
-                let step = channel.effect_arg as u16;
-                channel.period = channel.base_period.saturating_add(step);
-                channel.base_period = channel.period;
-            }
-        }
-
-        // 0x3: Tone Portamento
-        0x3 => {
-            if tick > 0 {
-                let target_period = channel.period;
-                let step = channel.effect_arg as u16;
-                if channel.period > target_period {
-                    channel.period = channel.base_period.saturating_sub(step);
-                } else if channel.period < target_period {
-                    channel.period = channel.base_period.saturating_add(step);
-                }
-            }
-        }
-
-        // 0x4: Vibrato
-        0x4 => {
-            if tick > 0 {
-                let speed = (channel.effect_arg & 0xF0) >> 4; // High nibble
-                let depth = channel.effect_arg & 0x0F; // Low nibble
-                                                       // TODO: Implement vibrato logic using a sine wave table
-            }
-        }
-
-        // 0xA: Volume Slide
-        0xA => {
-            if tick > 0 {
-                let slide_up = (channel.effect_arg & 0xF0) >> 4; // High nibble
-                let slide_down = channel.effect_arg & 0x0F; // Low nibble
-                if slide_up > 0 {
-                    channel.volume = channel.volume.saturating_add(slide_up);
-                } else if slide_down > 0 {
-                    channel.volume = channel.volume.saturating_sub(slide_down);
-                }
-            }
-        }
-
-        // 0xB: Position Jump
-        0xB => {
-            if tick == 0 {
-                // Position Jump (Bxx): Jumps to a specific pattern
-                // TODO: Implement position jump logic in the engine
-            }
-        }
-
-        // 0xC: Set Volume
-        0xC => {
-            if tick == 0 {
-                // Set Volume (Cxx): Sets the volume to xx
-                channel.volume = channel.effect_arg.min(64); // Clamp to max volume of 64
-            }
-        }
-
-        // 0xD: Pattern Break
-        0xD => {
-            if tick == 0 {
-                // Pattern Break (Dxx): Jumps to a specific row in the next pattern
-                // TODO: Implement pattern break logic in the engine
-            }
-        }
-
-        // 0xE: Extended Effects
-        0xE => {
-            let sub_effect = (channel.effect_arg & 0xF0) >> 4; // High nibble
-            let sub_arg = channel.effect_arg & 0x0F; // Low nibble
-            match sub_effect {
-                // E1x: Fine Portamento Up
-                0x1 => {
-                    if tick == 0 {
-                        channel.period = channel.base_period.saturating_sub(sub_arg as u16);
-                    }
-                }
-                // E2x: Fine Portamento Down
-                0x2 => {
-                    if tick == 0 {
-                        channel.period = channel.base_period.saturating_add(sub_arg as u16);
-                    }
-                }
-                // E9x: Retrigger Note
-                0x9 => {
-                    if tick % sub_arg == 0 {
-                        // TODO: Retrigger the note
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // 0xF: Set Speed/Tempo
-        0xF => {
-            if tick == 0 {
-                if channel.effect_arg <= 0x1F {
-                    // Set speed (ticks per row)
-                    // TODO: Update the engine's speed
-                } else {
-                    // Set tempo (BPM)
-                    // TODO: Update the engine's tempo
-                }
-            }
-        }
-
-        _ => {
-            // Unknown effect
-            //eprintln!("Unknown effect: {:X}", channel.effect);
-        }
-    }
 }
