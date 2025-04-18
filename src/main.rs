@@ -38,7 +38,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let engine = Arc::new(Mutex::new(Engine::new(track)));
 
-    
     if config.is_ok() {
         println!("Audio detected");
         println!("Playing pattern: 0");
@@ -75,8 +74,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
             None,
         )?;
-       
+
         stream.play()?;
+        // Keep stream alive
+        loop {
+            if engine.lock().unwrap().is_finished() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     } else {
         println!("No audio detected");
         println!("Playing pattern: 0");
@@ -95,6 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // Keep main thread alive
     loop {
         if engine.lock().unwrap().is_finished() {
             break;
