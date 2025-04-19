@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use super::TrackerEngine;
 use crate::tracker;
 use crate::{song, Song};
@@ -84,14 +86,99 @@ impl Default for ChannelState {
     }
 }
 
+fn split_nibbles(x: u8) -> (u8, u8) {
+    let x = (x & 0xF0) >> 4;
+    let y = x & 0x0F;
+    (x, y)
+}
+
+// use the type system to your advantage:
+// make it document your code for you, so you dont
+// have to leave notes about what certain magic values
+// mean all over the place
+// also guarantees safety, so that by the point
+// you decode what the effect is, you know its 
+// correct and you're ready to apply it confidently
+// and safely
+enum SubEffect {
+    FinePortmamentoUp(u16),
+    FinePortamentoDown(u16),
+    RetriggerNote(u8),
+}
+
+enum Effect {
+    Arpeggio { x: u8, y: u8 },
+    PortamentoUp(u16),
+    PortamentoDown(u16),
+    TonePortamento(u16),
+    Vibrato { speed: u8, depth: u8 },
+    VolumeSlide { slide_up: u8, slide_down: u8 },
+    PositionJump,
+    SetVolume,
+    PatternBreak,
+    ExtendedEffect(SubEffect),
+    SetSpeed(u8),
+    SetTempo(u8),
+}
+
+impl Effect {
+    fn from_effect_and_arg_bytes(effect: u8, arg: u8) -> Option<Effect> {
+        use Effect::*;
+        let effect = match effect {
+            0x0 => {
+                let (x, y) = split_nibbles(arg);
+                Arpeggio { x, y }
+            }
+            0x1 => PortamentoUp(arg as u16),
+            0x2 => PortamentoDown(arg as u16),
+            0x3 => TonePortamento(arg as u16),
+            0x4 => {
+                let (speed, depth) = split_nibbles(arg);
+                Vibrato { speed, depth }
+            }
+            0xA => {
+                let (slide_up, slide_down) = split_nibbles(arg);
+                VolumeSlide {
+                    slide_up,
+                    slide_down,
+                }
+            }
+            0xB => PositionJump,
+            0xC => SetVolume,
+            0xD => PatternBreak,
+            0xE => {
+                use SubEffect::*;
+                let (sub, sub_arg) = split_nibbles(arg);
+                let subeff = match sub {
+                    0x1 => FinePortmamentoUp(sub_arg as u16),
+                    0x2 => FinePortamentoDown(sub_arg as u16),
+                    0x9 => RetriggerNote(sub_arg),
+                    _ => return None,
+                };
+                ExtendedEffect(subeff)
+            }
+            0xF => {
+                if arg <= 0x1F {
+                    SetSpeed(arg)
+                } else {
+                    SetTempo(arg)
+                }
+            }
+            _ => return None,
+        };
+        return Some(effect);
+    }
+}
+
 impl ChannelState {
     fn process_effects(&mut self, tick: u8) {
-        match self.effect {
-            // 0x0: Arpeggio
-            0x0 => {
+        use Effect::*;
+        let Some(effect) = Effect::from_effect_and_arg_bytes(self.effect, self.effect_arg) else {
+            panic!("Unknown effect: {} {}", self.effect, self.effect_arg)
+        };
+        match effect {
+            Arpeggio { x, y } => {
                 if tick > 0 {
-                    let x = (self.effect_arg & 0xF0) >> 4;
-                    let y = self.effect_arg & 0x0F;
                     if x == 0 && y == 0 {
                         return;
                     }
@@ -116,29 +203,23 @@ impl ChannelState {
                 }
             }
 
-            // 0x1: Portamento Up
-            0x1 => {
+            PortamentoUp(step) => {
                 if tick > 0 {
-                    let step = self.effect_arg as u16;
                     self.period = self.base_period.saturating_sub(step);
                     self.base_period = self.period;
                 }
             }
 
-            // 0x2: Portamento Down
-            0x2 => {
+            PortamentoDown(step) => {
                 if tick > 0 {
-                    let step = self.effect_arg as u16;
                     self.period = self.base_period.saturating_add(step);
                     self.base_period = self.period;
                 }
             }
 
-            // 0x3: Tone Portamento
-            0x3 => {
+            TonePortamento(step) => {
                 if tick > 0 {
                     let target_period = self.period;
-                    let step = self.effect_arg as u16;
                     if self.period > target_period {
                         self.period = self.base_period.saturating_sub(step);
                     } else if self.period < target_period {
@@ -147,20 +228,17 @@ impl ChannelState {
                 }
             }
 
-            // 0x4: Vibrato
-            0x4 => {
+            Vibrato { speed, depth } => {
                 if tick > 0 {
-                    let speed = (self.effect_arg & 0xF0) >> 4; // High nibble
-                    let depth = self.effect_arg & 0x0F; // Low nibble
-                                                        // TODO: Implement vibrato logic using a sine wave table
+                    // TODO: Implement vibrato logic using a sine wave table
                 }
             }
 
-            // 0xA: Volume Slide
-            0xA => {
+            VolumeSlide {
+                slide_up,
+                slide_down,
+            } => {
                 if tick > 0 {
-                    let slide_up = (self.effect_arg & 0xF0) >> 4; // High nibble
-                    let slide_down = self.effect_arg & 0x0F; // Low nibble
                     if slide_up > 0 {
                         self.volume = self.volume.saturating_add(slide_up);
                     } else if slide_down > 0 {
@@ -169,50 +247,42 @@ impl ChannelState {
                 }
             }
 
-            // 0xB: Position Jump
-            0xB => {
+            PositionJump => {
                 if tick == 0 {
                     // Position Jump (Bxx): Jumps to a specific pattern
                     // TODO: Implement position jump logic in the engine
                 }
             }
 
-            // 0xC: Set Volume
-            0xC => {
+            SetVolume => {
                 if tick == 0 {
                     // Set Volume (Cxx): Sets the volume to xx
                     self.volume = self.effect_arg.min(64); // Clamp to max volume of 64
                 }
             }
 
-            // 0xD: Pattern Break
-            0xD => {
+            PatternBreak => {
                 if tick == 0 {
                     // Pattern Break (Dxx): Jumps to a specific row in the next pattern
                     // TODO: Implement pattern break logic in the engine
                 }
             }
 
-            // 0xE: Extended Effects
-            0xE => {
-                let sub_effect = (self.effect_arg & 0xF0) >> 4; // High nibble
-                let sub_arg = self.effect_arg & 0x0F; // Low nibble
+            ExtendedEffect(sub_effect) => {
+                use SubEffect::*;
                 match sub_effect {
-                    // E1x: Fine Portamento Up
-                    0x1 => {
+                    FinePortmamentoUp(step) => {
                         if tick == 0 {
-                            self.period = self.base_period.saturating_sub(sub_arg as u16);
+                            self.period = self.base_period.saturating_sub(step);
                         }
                     }
-                    // E2x: Fine Portamento Down
-                    0x2 => {
+                    FinePortamentoDown(step) => {
                         if tick == 0 {
-                            self.period = self.base_period.saturating_add(sub_arg as u16);
+                            self.period = self.base_period.saturating_add(step);
                         }
                     }
-                    // E9x: Retrigger Note
-                    0x9 => {
-                        if tick % sub_arg == 0 {
+                    RetriggerNote(note_tick) => {
+                        if tick % note_tick == 0 {
                             // TODO: Retrigger the note
                         }
                     }
@@ -221,21 +291,16 @@ impl ChannelState {
             }
 
             // 0xF: Set Speed/Tempo
-            0xF => {
+            SetSpeed(speed) => {
                 if tick == 0 {
-                    if self.effect_arg <= 0x1F {
-                        // Set speed (ticks per row)
-                        // TODO: Update the engine's speed
-                    } else {
-                        // Set tempo (BPM)
-                        // TODO: Update the engine's tempo
-                    }
+                    // TODO: Update the engine's speed
                 }
             }
 
-            _ => {
-                // Unknown effect
-                //eprintln!("Unknown effect: {:X}", self.effect);
+            SetTempo(tempo) => {
+                if tick == 0 {
+                    // TODO: Update the engine's tempo
+                }
             }
         }
     }
@@ -435,18 +500,44 @@ impl ModEngine {
     }
 }
 
+// rewritten as a `Display` implementation for more flexibility, such as
+// ability to log the line to other output streams, ie. files, etc.
+struct SongLineDisplay<'a> {
+    pattern: &'a song::Pattern,
+    sample_metadata: &'a [song::Sample],
+    lineno: usize,
+}
+
+impl<'a> Display for SongLineDisplay<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let SongLineDisplay {
+            pattern,
+            sample_metadata,
+            lineno,
+        } = self;
+        let line = pattern.get(*lineno).unwrap();
+        let line_str = line
+            .iter()
+            .map(|note| {
+                let finetune = sample_metadata.get(note.sample as usize).unwrap().finetune;
+                let pnote = tracker::protracker_period_to_note(note.period, finetune);
+
+                pnote.unwrap_or(String::from("---"))
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        writeln!(f, "{:02}: {}", lineno, line_str)
+    }
+}
+
 fn print_line(pattern: &song::Pattern, sample_metadata: &Vec<song::Sample>, lineno: usize) {
-    let line = pattern.get(lineno).unwrap();
-    let line_str = line
-        .iter()
-        .map(|note| {
-            let finetune = sample_metadata.get(note.sample as usize).unwrap().finetune;
-            let pnote = tracker::protracker_period_to_note(note.period, finetune);
-
-            pnote.unwrap_or(String::from("---"))
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    println!("{:02}: {}", lineno, line_str);
+    println!(
+        "{}",
+        SongLineDisplay {
+            pattern,
+            sample_metadata,
+            lineno
+        }
+    )
 }
