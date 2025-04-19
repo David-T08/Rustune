@@ -26,6 +26,7 @@ pub trait TrackerEngine {
     fn tick_duration(&self) -> f32;
 }
 
+// could probably simplify a lot of this with a macro
 impl TrackerEngine for Engine {
     fn next_tick(&mut self) {
         match self {
