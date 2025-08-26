@@ -527,7 +527,7 @@ impl<'a> Display for SongLineDisplay<'a> {
             .collect::<Vec<_>>()
             .join(" ");
 
-        writeln!(f, "{:02}: {}", lineno, line_str)
+        write!(f, "{:02}: {}", lineno, line_str)
     }
 }
 
